@@ -29,32 +29,29 @@ trait Wallet[F[_]] {
 final class FileWallet[F[_]: Sync](id: WalletId) extends Wallet[F] {
 
   val path: Path = Paths.get(s"src/main/resources/$id.txt")
-
-  val file: Unit = {
-
-    def initializeWallet(amount: BigDecimal = 0.0): Unit =
-      Files.writeString(path, amount.toString)
-
-    if (Files.exists(path)) Files.delete(path)
-    Files.createFile(path); initializeWallet()
+  def createFile(initAmount: BigDecimal = 0.0): Unit = {
+    def initializeWallet(amount: BigDecimal): Unit = Files.writeString(path, amount.toString)
+    if (!Files.exists(path)) { Files.createFile(path); initializeWallet(initAmount) }
+  }
+  def balance: F[BigDecimal] = Sync[F].delay(BigDecimal(Files.readString(path)))
+  def topup(amount: BigDecimal): F[Unit] = {
+    for {
+      balanceRes <- balance
+      _ <- Sync[F].delay(Files.writeString(path, (balanceRes + amount).toString))
+    } yield ()
   }
 
-  def balance: F[BigDecimal] = Sync[F].delay(BigDecimal(Files.readString(path)))
-  def topup(amount: BigDecimal): F[Unit] =
-    balance.flatMap(b =>
-      Sync[F].delay(
-        Files.writeString(path, (b + amount).toString)
-      )
-    )
-
-  def withdraw(amount: BigDecimal): F[Either[WalletError, Unit]] =
-    balance.flatMap(balance =>
-      Sync[F].delay(balance - amount)
-        .map {
-          case res if res < 0 => Left(BalanceTooLow)
-          case res => Files.writeString(path, res.toString); Right()
-        }
-    )
+  def withdraw(amount: BigDecimal): F[Either[WalletError, Unit]] = {
+    for {
+      balanceRes <- balance
+      delta <- Sync[F].delay(balanceRes - amount)
+      res <- if (delta >= 0 ) {
+        Sync[F].delay(Files.writeString(path, delta.toString)).as(Right())
+      } else {
+        Sync[F].pure(Left(BalanceTooLow))
+      }
+    } yield res
+  }
 }
 
 object Wallet {
@@ -65,7 +62,10 @@ object Wallet {
   // вызывается она так: Sync[F].delay(...)
   // Тайпкласс Sync из cats-effect описывает возможность заворачивания сайд-эффектов
   def fileWallet[F[_]: Sync](id: WalletId): F[Wallet[F]] =
-    Sync[F].delay(new FileWallet(id))
+    for {
+      fileWallet <- Sync[F].delay(new FileWallet(id))
+      _ <- Sync[F].delay(fileWallet.createFile())
+    } yield fileWallet
 
   type WalletId = String
 
