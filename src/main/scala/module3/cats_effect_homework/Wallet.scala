@@ -2,7 +2,9 @@ package module3.cats_effect_homework
 
 import cats.effect.Sync
 import cats.implicits._
-import Wallet._
+import module3.cats_effect_homework.Wallet._
+
+import java.nio.file.{Files, Path, Paths}
 
 // DSL управления электронным кошельком
 trait Wallet[F[_]] {
@@ -25,9 +27,31 @@ trait Wallet[F[_]] {
 // - java.nio.file.Files.exists
 // - java.nio.file.Paths.get
 final class FileWallet[F[_]: Sync](id: WalletId) extends Wallet[F] {
-  def balance: F[BigDecimal] = ???
-  def topup(amount: BigDecimal): F[Unit] = ???
-  def withdraw(amount: BigDecimal): F[Either[WalletError, Unit]] = ???
+
+  val path: Path = Paths.get(s"src/main/resources/$id.txt")
+  def createFile(initAmount: BigDecimal = 0.0): Unit = {
+    def initializeWallet(amount: BigDecimal): Unit = Files.writeString(path, amount.toString)
+    if (!Files.exists(path)) { Files.createFile(path); initializeWallet(initAmount) }
+  }
+  def balance: F[BigDecimal] = Sync[F].delay(BigDecimal(Files.readString(path)))
+  def topup(amount: BigDecimal): F[Unit] = {
+    for {
+      balanceRes <- balance
+      _ <- Sync[F].delay(Files.writeString(path, (balanceRes + amount).toString))
+    } yield ()
+  }
+
+  def withdraw(amount: BigDecimal): F[Either[WalletError, Unit]] = {
+    for {
+      balanceRes <- balance
+      delta <- Sync[F].delay(balanceRes - amount)
+      res <- if (delta >= 0 ) {
+        Sync[F].delay(Files.writeString(path, delta.toString)).as(Right())
+      } else {
+        Sync[F].pure(Left(BalanceTooLow))
+      }
+    } yield res
+  }
 }
 
 object Wallet {
@@ -37,7 +61,11 @@ object Wallet {
   // Здесь нужно использовать обобщенную версию уже пройденного вами метода IO.delay,
   // вызывается она так: Sync[F].delay(...)
   // Тайпкласс Sync из cats-effect описывает возможность заворачивания сайд-эффектов
-  def fileWallet[F[_]: Sync](id: WalletId): F[Wallet[F]] = ???
+  def fileWallet[F[_]: Sync](id: WalletId): F[Wallet[F]] =
+    for {
+      fileWallet <- Sync[F].delay(new FileWallet(id))
+      _ <- Sync[F].delay(fileWallet.createFile())
+    } yield fileWallet
 
   type WalletId = String
 
